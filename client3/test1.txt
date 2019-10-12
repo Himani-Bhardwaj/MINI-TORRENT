@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include <chrono> 
 #include <ctime>
+#include <sstream>
 using namespace std;
 
 bool is_file(const char* path) {
@@ -63,9 +64,12 @@ void callDirectoryTransfer(int argc,char **argv){
 }
 
 void callFileTransfer(int argc,char **argv){
+		long long int limit= 1024*1024*1024*4;
+		long long int count = 0;
+		int i=1;		
 		int fd1, fd2;
 		char buffer[4096];
-		long int n1;
+		long long int n1;
 		fd2=open(argv[argc-1],O_CREAT|O_WRONLY, 0700);
 		for(int i=1;i< argc-1;i++){
 		int fd1 = open(argv[i], O_RDONLY);
@@ -73,12 +77,29 @@ void callFileTransfer(int argc,char **argv){
 			cout<<"file not found"<<endl;
 		}
 		else{
-			while ( (n1 = read(fd1, buffer, 4096)) > 0){
-        		if(write(fd2, buffer, n1) != n1){
+			while ( (n1 = read(fd1, buffer, 4096)) > 0){        		
+			cout<<n1;			
+			count += n1;
+			cout<<count<<endl;			
+			if(write(fd2, buffer, n1) != n1){
            		 perror("writing problem ");
             		exit(3);
         		}
-    			}
+			else{
+				if(count >= limit){
+				close(fd2); int j=0;
+				istringstream ss(argv[argc-1]);
+				string token,part[2];
+				while(std::getline(ss, token, '.')) {
+				    part[j] = token; j++;
+				}
+				string newName = part[0]+"_"+to_string(i)+"."+part[1];
+				fd2=open(newName.c_str(),O_CREAT|O_WRONLY, 0700);
+				i++;
+				count = 0;
+				}
+			}
+    		    }
 
 		}
 		close(fd1);

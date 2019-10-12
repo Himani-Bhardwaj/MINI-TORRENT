@@ -191,7 +191,7 @@ void createGroup(int new_socket,string group_id,string recievedSocket){
 void joinGroup(int new_socket,string group_id,string recievedSocket){
 	if(checkGroup(group_id)){
 		if(checkUserExistsInGroup(group_id,recievedSocket)){
-			string failiure = "You are already a memeber of the grup";
+			string failiure = "You are already a memeber of the group";
 			send(new_socket,failiure.c_str(),failiure.size(),0);
 		}
 		else{
@@ -213,7 +213,6 @@ void uploadFile(int new_socket,string file_path,string hashValue,string client,s
 	if(checkUserExistsInGroup(group_id,client)){
 		if(fDetails.size() == 0) {
 			fDetails.push_back(fd);
-			cout<<fDetails[0].file_path<<endl;
 			string message = "Your File is uploaded successfully";
 			send(new_socket,message.c_str(),message.size(),0);
 		}
@@ -240,33 +239,60 @@ void uploadFile(int new_socket,string file_path,string hashValue,string client,s
 		send(new_socket,message.c_str(),message.size(),0);
 	}
 }
+void sendHashValue(int new_socket,string finalHash){
+	int fileSizeSending=0;
+	char buffer[512];
+	ofstream out("hash.txt");
+	out << finalHash;
+    	out.close();
+	FILE *fs = fopen ( "hash.txt"  , "rb" );
+	fseek ( fs , 0 , SEEK_END);
+  	int size = ftell ( fs );
+  	rewind ( fs );
+	while(size > 0 && (fileSizeSending = fread(buffer, sizeof(char), 512, fs))>0)
+	    	{
+			if(send(new_socket, buffer, fileSizeSending, 0) < 0)
+	        	{
+	        	    cout<<"File CAnnot Be send"<<endl;
+			    break;
+	        	}
+	        	memset ( buffer , '\0', 512);
+			size = size - fileSizeSending ;
+	    	}
+}
 void listFiles(int new_socket,string group_id){
 	string toBeSend = "";
 	for(int i=0;i< fDetails.size();i++){
 		if( fDetails[i].group_id == group_id)
-			cout<<fDetails[i].group_id<<endl;
-			toBeSend = i+";"+fDetails[i].file_path+";"+fDetails[i].hashValue;
-			send(new_socket,toBeSend.c_str(),toBeSend.size(),0);
+			toBeSend += to_string(i)+":"+fDetails[i].file_path+":"+fDetails[i].hashValue+";";
 	}
-	toBeSend = "";
-	send(new_socket,toBeSend.c_str(),toBeSend.size(),0);
+	int size = toBeSend.size();
+	send(new_socket, &size, sizeof(size), 0);
+	char m[11] = {0};
+	recv(new_socket, m, sizeof(m), 0);
+	sendHashValue(new_socket,toBeSend);
 }
-void downloadFile(int new_socket,string file_path){
-	string toBeSend = "",hashValue;
-	for(int i=0;i< fDetails.size();i++){
-		if( fDetails[i].file_path == file_path){
-			 hashValue=fDetails[i].hashValue;
-			 break;
-		}
-	}
-	cout<<hashValue<<endl;
+void downloadFile(int new_socket,string hashValue){
+	string toBeSend = "";
 	for(int i=0;i< fDetails.size();i++){
 		if( fDetails[i].hashValue == hashValue){
 			 toBeSend += fDetails[i].client+";";
 		}
 	}
-	cout<<toBeSend<<endl;
 	send(new_socket,toBeSend.c_str(),toBeSend.size(),0);
+}
+string getHashValue(int new_socket,int size){
+	int n=0;
+	char hash1[512]={0};
+	string newString ="";
+	while(size > 0 && (n = recv(new_socket, hash1, sizeof(512), 0))>0 )
+	        	{
+		    		string s = hash1;
+				newString += s;
+		    		memset ( hash1 , '\0', 512);
+		    		size = size - n;
+	        	}
+return newString;
 }
 void *clientConnect(void *threadarg){
 	struct thread_data *my_data;
@@ -287,7 +313,8 @@ void *clientConnect(void *threadarg){
 	}
 	while(1){
 	char toBeRecieved[1024]={0};
-	string command;
+	string command;	
+	memset ( toBeRecieved , '\0', 1024);
 	recv(new_socket, toBeRecieved, sizeof(toBeRecieved), 0);
 	string recieved = toBeRecieved;
 	stringstream s(recieved); 
@@ -335,7 +362,7 @@ void *clientConnect(void *threadarg){
 			}
 			createGroup(new_socket,group_id,recievedSocket);	
 		}
-		else if(command == "join_group"){
+		if(command == "join_group"){
 			string group_id;
 			while(getline(s, word, ';')) {
 				count++;
@@ -343,17 +370,23 @@ void *clientConnect(void *threadarg){
 	   		}
 			joinGroup(new_socket,group_id,recievedSocket);	
 		}
-		else if(command == "upload_file"){
+		if(command == "upload_file"){
 			string file_path,hashValue,group_id;
+			int size;
+			
 			while(getline(s, word, ';')) {
 				count++;
 				if(count == 1) file_path = word;
-				else if(count == 2)  hashValue = word;
-				else if(count == 3)  group_id = word;
+				else if(count == 2)  group_id = word;
+				else if(count == 3) size = stoi(word);
+				
 	   		}
-			uploadFile(new_socket,file_path,hashValue,recievedSocket,group_id);	
+			string m = "got string";
+			send(new_socket,m.c_str(),m.size(),0);
+			hashValue = getHashValue(new_socket,size);
+			uploadFile(new_socket,file_path,hashValue,recievedSocket,group_id);
 		}
-		else if(command == "list_files"){
+		if(command == "list_files"){
 			string group_id;
 			while(getline(s, word, ';')) {
 				count++;
@@ -361,13 +394,18 @@ void *clientConnect(void *threadarg){
 	   		}
 			listFiles(new_socket,group_id);	
 		}
-		else if(command == "download_file"){
-			string file_path;
+		if(command == "download_file"){
+			string hashValue;
+			int size;
 			while(getline(s, word, ';')) {
 				count++;
-				if(count == 1) file_path = word;
+				if(count == 1) size = stoi(word);
+				
 	   		}
-			downloadFile(new_socket,file_path);	
+			string str = "got string";
+			send(new_socket,str.c_str(),str.size(),0);
+			hashValue = getHashValue(new_socket,size);
+			downloadFile(new_socket,hashValue);	
 		}
 	}
 	close(new_socket);
@@ -394,10 +432,10 @@ int main(int argc,char **argv){
 		}
 		if( pthread_create(&connectToClient[i], NULL, clientConnect, (void *)&td[i]) != 0 )
            	printf("Failed to create thread\n");		
-		if( i >= 50)
+		if( i >= 3)
         	{
           		i = 0;
-          		while(i < 50)
+          		while(i < 3)
           		{
             			pthread_join(connectToClient[i++],NULL);
           		}
