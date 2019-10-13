@@ -134,7 +134,7 @@ void sendFile(int new_socket,char m[SEND_SIZE]){
 	FILE* fp ;
 	fp = fopen(file_path.c_str(), "rb");
 		recv(new_socket, &ack, sizeof ack, 0) ;
-		char buff[CHUNK_SIZE] ;
+		char buff[SEND_SIZE] ;
 		int bytesToBeSend = CHUNK_SIZE;
 		if(ack == noOfChunks ) bytesToBeSend = file_size - (CHUNK_SIZE * (noOfChunks-1));
 		else bytesToBeSend = CHUNK_SIZE;
