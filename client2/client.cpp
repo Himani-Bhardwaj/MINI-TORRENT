@@ -54,6 +54,13 @@ struct recieved_file_data {
 	int noOfChunks;
 	string file_path ;
 };
+struct socketToConnect{
+	string clientIpaddress;
+	string clientPort;
+	string trackerIpaddress;
+	string trackerPort;	
+};
+string trackerSocket;
 struct recieved_file_data rd;
 vector<string> availableRequests;
 //display successful message
@@ -191,7 +198,7 @@ void *connectForSendingFileFunc(void *threadarg){
 	else sendFile(new_socket,m);
 }
 //starting server
-int startServer(){
+int startServer(string clientIpaddress,string clientPort){
 	int socket_fd,opt=1;
 	socket_fd=socket(AF_INET,SOCK_STREAM,0);
 	if(socket_fd == 0){
@@ -204,8 +211,8 @@ int startServer(){
     	    exit(EXIT_FAILURE); 
     	} 
 	addressOfServer.sin_family = AF_INET; 
-    	addressOfServer.sin_addr.s_addr = inet_addr("127.0.0.1"); 
-    	addressOfServer.sin_port = htons( 12002 );
+    	addressOfServer.sin_addr.s_addr = inet_addr(clientIpaddress.c_str()); 
+    	addressOfServer.sin_port = htons( stoi(clientPort) );
 	if( bind(socket_fd,(struct sockaddr*)&addressOfServer,sizeof(addressOfServer)) < 0){
 		cout<<"Cannot Bind Socket"<<endl;
 		exit(EXIT_FAILURE);
@@ -219,7 +226,9 @@ return socket_fd;
 }
 //inside server thread
 void *serverFunction(void *threadarg){
-	int socket_fd = startServer(),new_socket;	
+	struct socketToConnect *my_data;
+   	my_data = (struct socketToConnect *) threadarg;
+	int socket_fd = startServer(my_data->clientIpaddress,my_data->clientPort),new_socket;	
 	struct sockaddr_in addressOfClient;
 	int addrlen = sizeof(addressOfClient);
 	pthread_t connectForSendingFile;
@@ -689,7 +698,7 @@ void createUser(int socket_fd,string command,string username,string password){
 	displayMessage(socket_fd);
 }
 //connecting to tracker
-int connectToTracker(){
+int connectToTracker(string clientIpaddress,string clientPort,string trackerIpaddress,string trackerPort){
 	int socket_fd,con,opt=1;
 	socket_fd=socket(AF_INET,SOCK_STREAM,0);
 	if(socket_fd == 0){
@@ -697,11 +706,11 @@ int connectToTracker(){
 		exit(EXIT_FAILURE); 
 	}
 	addressOfServer.sin_family = AF_INET; 
-    	addressOfServer.sin_addr.s_addr = inet_addr("127.0.0.1"); 
-    	addressOfServer.sin_port = htons( 12004 );
+    	addressOfServer.sin_addr.s_addr = inet_addr(trackerIpaddress.c_str()); 
+    	addressOfServer.sin_port = htons( stoi(trackerPort) );
 	addressOfClient.sin_family = AF_INET;  
-        addressOfClient.sin_addr.s_addr = inet_addr("127.0.0.1"); 
-        addressOfClient.sin_port = htons(12002 );
+        addressOfClient.sin_addr.s_addr = inet_addr(clientIpaddress.c_str()); 
+        addressOfClient.sin_port = htons(stoi(clientPort));
 	if(setsockopt(socket_fd, SOL_SOCKET,SO_REUSEADDR | SO_REUSEPORT,&opt,sizeof(opt))){
 		cout<<"setsockopt"<<endl;
 		exit(EXIT_FAILURE);
@@ -713,14 +722,16 @@ int connectToTracker(){
 	if ((con=connect(socket_fd, (struct sockaddr *)&addressOfServer, sizeof(addressOfServer))) < 0) 
     	{ 
     	    cout<<"Connection failed"<<endl; 
-    	    exit(EXIT_FAILURE); 
+    	    pthread_exit(NULL); 
     	}
 	else cout<<"Connectng to server........."<<endl;
 	return socket_fd;
 }
 //this is for starting client
 void *clientFunction(void *threadarg){
-	int socket_fd_for_tracker = connectToTracker();
+	struct socketToConnect *my_data;
+   	my_data = (struct socketToConnect *) threadarg;
+	int socket_fd_for_tracker = connectToTracker(my_data->clientIpaddress,my_data->clientPort,my_data->trackerIpaddress,my_data->trackerPort);
 	int valread;
 	string group_id,command,username,password;
 	displayMessage(socket_fd_for_tracker);
@@ -792,10 +803,40 @@ void *clientFunction(void *threadarg){
 }
 //creating threads for client and server
 int main(int argc,char **argv){
-	pthread_t clientThread,serverThread;
-	pthread_create(&clientThread,NULL,clientFunction,NULL);		
-	pthread_create(&serverThread,NULL,serverFunction,NULL);
-	pthread_join(clientThread,NULL);
+	string socket = argv[1];
+	struct socketToConnect td;
+	stringstream ss(socket);
+	string word; int count = 0;
+	pthread_t clientThread,serverThread; 
+  	while(getline(ss, word, ':')){
+		count++;
+		if(count ==1 ) td.clientIpaddress = word;
+		else td.clientPort= word;
+	}
+	string file = argv[2];
+	ifstream in(file);
+	string str;
+	if(in.is_open())
+	{
+		while (getline(in, str))
+		{
+			cout<<str<<endl;
+			if(str.size() > 0){
+				stringstream s(str); 
+  				string word;
+				count = 0; 
+		 	 	while(getline(s, word, ':')) {
+					count++;
+					if(count ==1 ) td.trackerIpaddress = word;
+					else td.trackerPort= word;
+				}
+				pthread_create(&clientThread,NULL,clientFunction,(void *)&td);				
+				pthread_join(clientThread,NULL);
+			}	
+		}
+	}
+    	in.close();	
+	pthread_create(&serverThread,NULL,serverFunction,(void *)&td);
 	pthread_join(serverThread,NULL);
 	
     return 0;  
