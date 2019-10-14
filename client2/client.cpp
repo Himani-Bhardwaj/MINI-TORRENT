@@ -12,10 +12,10 @@
 #include <fstream>
 #include <string>
 #include <deque> 
+#define MAX_SOCKETS 10000
 #define STRING_SIZE 11
 #define SEND_SIZE 512
-#define CHUNK_SIZE 512
-#define MAX_SOCKETS 3
+#define CHUNK_SIZE 524288
 using namespace std;
 struct sockaddr_in addressOfServer;
 struct sockaddr_in addressOfClient;
@@ -60,6 +60,7 @@ struct socketToConnect{
 	string trackerIpaddress;
 	string trackerPort;	
 };
+struct socketToConnect conn;
 string trackerSocket;
 struct recieved_file_data rd;
 vector<string> availableRequests;
@@ -128,6 +129,56 @@ string getHash(string file_path){
 	}
 	return hashValue;
 }
+//calculate SHA for a file
+string sha256_hash_string (unsigned char hash[SHA256_DIGEST_LENGTH])
+{
+	stringstream ss;
+	for(int i = 0; i < SHA256_DIGEST_LENGTH; i++)
+	{
+		ss << hex << setw(2) << setfill('0') << (int)hash[i];
+	}
+	return ss.str();
+}
+string sha256(const string str)
+{
+	unsigned char hash[SHA256_DIGEST_LENGTH];
+	SHA256_CTX sha256;
+	SHA256_Init(&sha256);
+	SHA256_Update(&sha256, str.c_str(), str.size());
+	SHA256_Final(hash, &sha256);
+	stringstream ss;
+	for(int i = 0; i < SHA256_DIGEST_LENGTH; i++)
+	{
+	        ss << hex << setw(2) << setfill('0') << (int)hash[i];
+	}
+	return ss.str();
+}
+
+string sha256_file(FILE *file,int file_size,int noOfChunks)
+{
+	if(!file) return NULL;
+	string finalHash="";
+	unsigned char hash[SHA256_DIGEST_LENGTH];
+	SHA256_CTX sha256;
+	SHA256_Init(&sha256);
+	const int bufSize = SEND_SIZE;
+	unsigned char *buffer =(unsigned char*) malloc(bufSize+1);
+	int bytesRead = 0;
+	if(!buffer) return NULL;
+	int i=0;
+		while((bytesRead = fread(buffer, sizeof(char), bufSize, file))){
+			SHA256_Update(&sha256, buffer, bytesRead);
+			SHA256_Final(hash, &sha256);
+	        	string outputBuffer = sha256_hash_string(hash);
+			string finalAnswer = outputBuffer.substr(0, 20);
+			finalHash += finalAnswer;
+	        	memset ( buffer , '\0', SEND_SIZE);
+		}
+	
+   	fclose(file);
+	free(buffer);
+	return finalHash;
+}
 //sending actual file
 void sendFile(int new_socket,char m[SEND_SIZE]){
 	string file_path=rd.file_path;	
@@ -143,15 +194,20 @@ void sendFile(int new_socket,char m[SEND_SIZE]){
 		recv(new_socket, &ack, sizeof ack, 0) ;
 		char buff[SEND_SIZE] ;
 		int bytesToBeSend = CHUNK_SIZE;
+		cout<<"client has requested for chunk : "<<ack<<endl;
 		if(ack == noOfChunks ) bytesToBeSend = file_size - (CHUNK_SIZE * (noOfChunks-1));
 		else bytesToBeSend = CHUNK_SIZE;
 		fseek(fp, CHUNK_SIZE*(ack-1), SEEK_SET);
 		while( bytesToBeSend > 0 && (bytes_read = fread(buff, sizeof(char), sizeof buff, fp)) > 0 )
 		{
 			send(new_socket, buff, bytes_read, 0);
+			memset(buff,'\0',SEND_SIZE);
 			bytesToBeSend -= bytes_read ;
 		}
 	fclose(fp) ;
+	close(new_socket);
+	pthread_exit(NULL);
+	
 }
 //sending file details to client
 void sendingFileDetails(int new_socket){
@@ -228,21 +284,22 @@ return socket_fd;
 void *serverFunction(void *threadarg){
 	struct socketToConnect *my_data;
    	my_data = (struct socketToConnect *) threadarg;
-	int socket_fd = startServer(my_data->clientIpaddress,my_data->clientPort),new_socket;	
+	int socket_fd = startServer(my_data->clientIpaddress,my_data->clientPort),new_socket[MAX_SOCKETS],i=-1;;	
 	struct sockaddr_in addressOfClient;
 	int addrlen = sizeof(addressOfClient);
-	pthread_t connectForSendingFile;
+	pthread_t connectForSendingFile[MAX_SOCKETS];
 	while(1)
     	{
-        	new_socket = accept(socket_fd, (struct sockaddr *)&addressOfClient, (socklen_t*)&addrlen);
-		if (new_socket < 0 )
+        	i++;
+		new_socket[i] = accept(socket_fd, (struct sockaddr *)&addressOfClient, (socklen_t*)&addrlen);
+		if (new_socket[i] < 0 )
     		{ 
         		cout<<"Cannot accept socket"<<endl; 
         		exit(EXIT_FAILURE); 
     		} 
-		if( pthread_create(&connectForSendingFile, NULL, connectForSendingFileFunc, &new_socket ))
+		if( pthread_create(&connectForSendingFile[i], NULL, connectForSendingFileFunc, &new_socket[i] ))
            	printf("Failed to create thread\n");		
-		pthread_join(connectForSendingFile,NULL);
+		pthread_join(connectForSendingFile[i],NULL);
           }
 }
 //getting connected to individual server
@@ -263,8 +320,7 @@ int connectToServer(string ipaddress,string port){
     	    exit(EXIT_FAILURE); 
     	}
 	return socket_fd;
-}
-//get actual file
+}//get actual file
 void getFile(int socket_fd,int chunk,string file_path,int noOfChunks,int file_size,string destinationFilePath){
 	FILE* fp ;
 	fp = fopen(destinationFilePath.c_str(), "r+");
@@ -279,6 +335,7 @@ void getFile(int socket_fd,int chunk,string file_path,int noOfChunks,int file_si
 		while( sizeToBeRecieved > 0 && (bytes_recv = recv(socket_fd, buf, sizeof buf, 0)) > 0)
 		{
 			fwrite(buf, sizeof(char), bytes_recv, fp);
+			memset(buf,'\0',bytes_recv);
 			sizeToBeRecieved -= bytes_recv ;
 		}
 	fclose(fp);
@@ -309,7 +366,8 @@ void *getFileFunction(void *threadarg){
 }
 //searching algorithm when all chunks from sockets are recieved
 void searchingAlgorithm(string file_path,string destinationFilePath){
-	int noOfChunks,noOfSockets;
+	int noOfChunks,noOfSockets,file_size;
+	string hashValue;
 	deque <string> socketArray;
 	vector<pair<string,vector<int>>> chunks;	
 	for(int i=0;i<dfDetails.size();i++){
@@ -317,6 +375,8 @@ void searchingAlgorithm(string file_path,string destinationFilePath){
 			noOfChunks = dfDetails[i].noOfChunks;
 			noOfSockets = dfDetails[i].chunks.size();
 			chunks = dfDetails[i].chunks;
+			hashValue = dfDetails[i].hashValue;
+			file_size=dfDetails[i].fileSize;
 			for(int j=0;j< noOfSockets;j++){
 				socketArray.push_back(dfDetails[i].chunks[j].first);
 			}
@@ -326,6 +386,7 @@ void searchingAlgorithm(string file_path,string destinationFilePath){
 	thread_data_for_file td;
 	td.file_path = file_path;
 	td.destinationFilePath= destinationFilePath;
+	pthread_t getFileThread[noOfChunks+1];
 	while(i <= noOfChunks){
 		bool flag = false;
 		string recieved;
@@ -347,19 +408,22 @@ void searchingAlgorithm(string file_path,string destinationFilePath){
 							if(count ==1 ) td.ipaddress = word;
 							else td.port= word;
 						}
-						pthread_t getFileThread;
 						i++;
-						pthread_create(&getFileThread,NULL,getFileFunction,(void *)&td);
-						pthread_join(getFileThread,NULL);
+						pthread_create(&getFileThread[i],NULL,getFileFunction,(void *)&td);
+						pthread_join(getFileThread[i],NULL);
 						break;
 					}
 				}
 			}
 		}
 	}
+	FILE *fs = fopen ( destinationFilePath.c_str()  , "rb" );
+	string finalHash = sha256_file(fs,file_size,noOfChunks);
+	if(finalHash == hashValue) cout<<"File is downloaded correctly"<<endl;
+	else cout<<"file downloaded correctly"<<endl;
 }
 //getting all chunks from server and closing download thread
-void getChunksForSocket(int socket_fd,string fileChunks,string file_path,string socket,int noOfChunks,int file_size){
+void getChunksForSocket(int socket_fd,string fileChunks,string file_path,string socket,int noOfChunks,int file_size,string hashValue){
 	stringstream ss(fileChunks);
 	vector<int> chunksOfFileToBeDownloaded;
 	int count = 0;
@@ -373,6 +437,7 @@ void getChunksForSocket(int socket_fd,string fileChunks,string file_path,string 
 			dfDetails[i].chunks.push_back(make_pair(socket,chunksOfFileToBeDownloaded));
 			dfDetails[i].noOfChunks=noOfChunks;
 			dfDetails[i].fileSize=file_size;
+			dfDetails[i].hashValue=hashValue;
 		}
 	}
 	close(socket_fd);
@@ -381,7 +446,6 @@ void getChunksForSocket(int socket_fd,string fileChunks,string file_path,string 
 }
 //getting file parameters like noOfChunks,file size
 void getFileData(int socket_fd,string file_path,string socket,string destinationFilePath){
-	
 	string hashValue = getHash(file_path);
 	int size = hashValue.size();
 	send(socket_fd,&size,sizeof(size),0);
@@ -411,7 +475,7 @@ void getFileData(int socket_fd,string file_path,string socket,string destination
 	send(socket_fd,str.c_str(),str.size(),0);
 
 	string recieved = getLargeString(socket_fd,size);
-	getChunksForSocket(socket_fd,recieved,file_path,socket,noOfChunks,file_size);
+	getChunksForSocket(socket_fd,recieved,file_path,socket,noOfChunks,file_size,hashValue);
 }
 //2nd level thread to downloadFile
 void *downloadFunction(void *threadarg){
@@ -511,65 +575,17 @@ void listFiles(int socket_fd,string command,string group_id){
 	send(socket_fd,toBeSend.c_str(),toBeSend.size(),0);
 	displayListOfFiles(socket_fd);
 }
-//calculate SHA for a file
-string sha256_hash_string (unsigned char hash[SHA256_DIGEST_LENGTH])
-{
-	stringstream ss;
-	for(int i = 0; i < SHA256_DIGEST_LENGTH; i++)
-	{
-		ss << hex << setw(2) << setfill('0') << (int)hash[i];
-	}
-	return ss.str();
-}
-string sha256(const string str)
-{
-	unsigned char hash[SHA256_DIGEST_LENGTH];
-	SHA256_CTX sha256;
-	SHA256_Init(&sha256);
-	SHA256_Update(&sha256, str.c_str(), str.size());
-	SHA256_Final(hash, &sha256);
-	stringstream ss;
-	for(int i = 0; i < SHA256_DIGEST_LENGTH; i++)
-	{
-	        ss << hex << setw(2) << setfill('0') << (int)hash[i];
-	}
-	return ss.str();
-}
-
-string sha256_file(FILE *file,int file_size,int noOfChunks)
-{
-	if(!file) return NULL;
-	string finalHash="";
-	unsigned char hash[SHA256_DIGEST_LENGTH];
-	SHA256_CTX sha256;
-	SHA256_Init(&sha256);
-	const int bufSize = SEND_SIZE;
-	unsigned char *buffer =(unsigned char*) malloc(bufSize+1);
-	int bytesRead = 0;
-	if(!buffer) return NULL;
-	int i=0;
-		while((bytesRead = fread(buffer, sizeof(char), bufSize, file))){
-			SHA256_Update(&sha256, buffer, bytesRead);
-			SHA256_Final(hash, &sha256);
-	        	string outputBuffer = sha256_hash_string(hash);
-			string finalAnswer = outputBuffer.substr(0, 20);
-			finalHash += finalAnswer;
-	        	memset ( buffer , '\0', SEND_SIZE);
-		}
-	
-   	fclose(file);
-	free(buffer);
-	return finalHash;
-}
 //uploading file at tracker
 void uploadFile(int socket_fd,string command,string file_path,string group_id){
 	FILE *fs = fopen ( file_path.c_str()  , "rb" );
-	long int fileSizeSending = 0,noOfChunks=0;
+	int fileSizeSending = 0,noOfChunks=0;
 	fseek ( fs , 0 , SEEK_END);
-  	int file_size = ftell ( fs );
+  	long long file_size = ftell ( fs );
   	rewind ( fs );
-	if(file_size % CHUNK_SIZE == 0) noOfChunks = file_size/CHUNK_SIZE;
-	else noOfChunks = (file_size/CHUNK_SIZE)+1;
+	long long divisor = file_size/CHUNK_SIZE;
+	long long remainder = file_size % CHUNK_SIZE;
+	if(remainder == 0) noOfChunks = divisor;
+	else noOfChunks = divisor+1;
 	string finalHash = sha256_file(fs,file_size,noOfChunks);
 	int j=0;
 	int size = finalHash.size();
@@ -804,15 +820,15 @@ void *clientFunction(void *threadarg){
 //creating threads for client and server
 int main(int argc,char **argv){
 	string socket = argv[1];
-	struct socketToConnect td;
 	stringstream ss(socket);
 	string word; int count = 0;
 	pthread_t clientThread,serverThread; 
   	while(getline(ss, word, ':')){
 		count++;
-		if(count ==1 ) td.clientIpaddress = word;
-		else td.clientPort= word;
-	}
+		if(count ==1 ) conn.clientIpaddress = word;
+		else conn.clientPort= word;
+	}	
+	pthread_create(&serverThread,NULL,serverFunction,(void *)&conn);
 	string file = argv[2];
 	ifstream in(file);
 	string str;
@@ -820,23 +836,21 @@ int main(int argc,char **argv){
 	{
 		while (getline(in, str))
 		{
-			cout<<str<<endl;
 			if(str.size() > 0){
 				stringstream s(str); 
   				string word;
 				count = 0; 
 		 	 	while(getline(s, word, ':')) {
 					count++;
-					if(count ==1 ) td.trackerIpaddress = word;
-					else td.trackerPort= word;
+					if(count ==1 ) conn.trackerIpaddress = word;
+					else conn.trackerPort= word;
 				}
-				pthread_create(&clientThread,NULL,clientFunction,(void *)&td);				
+				pthread_create(&clientThread,NULL,clientFunction,(void *)&conn);				
 				pthread_join(clientThread,NULL);
 			}	
 		}
 	}
     	in.close();	
-	pthread_create(&serverThread,NULL,serverFunction,(void *)&td);
 	pthread_join(serverThread,NULL);
 	
     return 0;  

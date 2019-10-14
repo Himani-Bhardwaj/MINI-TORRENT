@@ -10,10 +10,10 @@
 #include <fstream>
 #include <vector>
 #include<pthread.h>
-#define MAX_SOCKETS 3
+#define MAX_SOCKETS 10000
 #define STRING_SIZE 11
 #define SEND_SIZE 512
-#define CHUNK_SIZE 512
+#define CHUNK_SIZE 512*1024
 using namespace std;
 struct sockaddr_in addressOfServer;
 struct sockaddr_in addressOfClient;
@@ -39,6 +39,12 @@ struct thread_data {
    	int  new_socket;
    	struct sockaddr_in addressOfClient;
 };
+
+struct socketToConnect{
+	string trackerIpaddress;
+	string trackerPort;	
+};
+struct socketToConnect conn;
 vector<struct groupDetails> gDetails;
 vector<struct userDetails> uDetails;
 vector<struct fileDetails> fDetails;
@@ -816,7 +822,8 @@ void *clientConnect(void *threadarg){
         inet_ntop(AF_INET, &(addressOfClient.sin_addr), ip, INET_ADDRSTRLEN);
 	string str = ip;
 	string str1 = to_string(ntohs(addressOfClient.sin_port));	
-	string recievedSocket = str+":"+str1; 
+	string recievedSocket = str+":"+str1;
+	cout<<"Request came from socket : "<<recievedSocket<<endl;
 	sendWelcomeMessage(new_socket);
 	while(1){
 	char toBeRecieved[SEND_SIZE]={0};
@@ -970,7 +977,8 @@ void *clientConnect(void *threadarg){
 	close(new_socket);
 }
 //starting tracker sending it in listen mode
-int startTracker(){
+int startTracker(string trackerIpaddress,string trackerPort){
+	cout<<"Tracker started at port : "<<trackerPort<<endl;
 	int socket_fd,opt=1;
 	socket_fd=socket(AF_INET,SOCK_STREAM,0);
 	if(socket_fd == 0){
@@ -983,11 +991,10 @@ int startTracker(){
     	    exit(EXIT_FAILURE); 
     	} 
 	addressOfServer.sin_family = AF_INET; 
-    	addressOfServer.sin_addr.s_addr = inet_addr("127.0.0.1"); 
-    	addressOfServer.sin_port = htons( 12004 );
+    	addressOfServer.sin_addr.s_addr = inet_addr(trackerIpaddress.c_str()); 
+    	addressOfServer.sin_port = htons( stoi(trackerPort) );
 	if( bind(socket_fd,(struct sockaddr*)&addressOfServer,sizeof(addressOfServer)) < 0){
-		cout<<"Cannot Bind Socket"<<endl;
-		exit(EXIT_FAILURE);
+		return -1;
 	}
 	if (listen(socket_fd, MAX_SOCKETS) < 0) 
     	{ 
@@ -998,7 +1005,30 @@ return socket_fd;
 }
 int main(int argc,char **argv){
 	
-	int socket_fd = startTracker(),new_socket;	
+	int socket_fd,new_socket;
+	string file = argv[1];
+	ifstream in(file);
+	string str;
+	if(in.is_open())
+	{
+		while (getline(in, str))
+		{
+			if(str.size() > 0){
+				stringstream s(str); 
+  				string word;
+				int count = 0; 
+		 	 	while(getline(s, word, ':')) {
+					count++;
+					if(count ==1 ) conn.trackerIpaddress = word;
+					else conn.trackerPort= word;
+				}
+				socket_fd = startTracker(conn.trackerIpaddress,conn.trackerPort);
+				if(socket_fd < 0) continue;
+				else break;
+			}	
+		}
+	}
+    	in.close();		
 	struct sockaddr_in addressOfClient;
 	int addrlen = sizeof(addressOfClient);
 	int i = 0;	
