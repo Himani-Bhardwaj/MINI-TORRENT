@@ -194,6 +194,7 @@ void sendFile(int new_socket,char m[SEND_SIZE]){
 		recv(new_socket, &ack, sizeof ack, 0) ;
 		char buff[SEND_SIZE] ;
 		int bytesToBeSend = CHUNK_SIZE;
+		cout<<"Chunks recieved"<<endl;
 		if(ack == noOfChunks ) bytesToBeSend = file_size - (CHUNK_SIZE * (noOfChunks-1));
 		else bytesToBeSend = CHUNK_SIZE;
 		fseek(fp, CHUNK_SIZE*(ack-1), SEEK_SET);
