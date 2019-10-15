@@ -161,7 +161,7 @@ string sha256_file(FILE *file,int file_size,int noOfChunks)
 	unsigned char hash[SHA256_DIGEST_LENGTH];
 	SHA256_CTX sha256;
 	SHA256_Init(&sha256);
-	const int bufSize = SEND_SIZE;
+	const int bufSize = CHUNK_SIZE;
 	unsigned char *buffer =(unsigned char*) malloc(bufSize+1);
 	int bytesRead = 0;
 	if(!buffer) return NULL;
@@ -172,7 +172,7 @@ string sha256_file(FILE *file,int file_size,int noOfChunks)
 	        	string outputBuffer = sha256_hash_string(hash);
 			string finalAnswer = outputBuffer.substr(0, 20);
 			finalHash += finalAnswer;
-	        	memset ( buffer , '\0', SEND_SIZE);
+	        	memset ( buffer , '\0', CHUNK_SIZE);
 		}
 	
    	fclose(file);
@@ -194,7 +194,6 @@ void sendFile(int new_socket,char m[SEND_SIZE]){
 		recv(new_socket, &ack, sizeof ack, 0) ;
 		char buff[SEND_SIZE] ;
 		int bytesToBeSend = CHUNK_SIZE;
-		cout<<"client has requested for chunk : "<<ack<<endl;
 		if(ack == noOfChunks ) bytesToBeSend = file_size - (CHUNK_SIZE * (noOfChunks-1));
 		else bytesToBeSend = CHUNK_SIZE;
 		fseek(fp, CHUNK_SIZE*(ack-1), SEEK_SET);
@@ -561,7 +560,6 @@ void displayListOfFiles(int socket_fd){
 				}
 				else {
 					df.hashValue = word;
-					cout<<"HASH VALUE : "<< word<<endl;
 				}
 			}
 			if(checkExistanceOfFile(df)) dfDetails.push_back(df);
